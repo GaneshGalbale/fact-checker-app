@@ -5,7 +5,7 @@ Automated claim verification system that extracts factual claims from PDF docume
 ## 🚀 Live Demo
 
 **App URL:** https://fact-checker-app-ganeshgalbale.streamlit.app
-**App URL:** https://drive.google.com/file/d/1NKfLIJJVl-VomKdhWDNImHFS1LIrgRbY/view?usp=drive_link
+**Demo-Video(if api credit issue):** https://drive.google.com/file/d/1NKfLIJJVl-VomKdhWDNImHFS1LIrgRbY/view?usp=drive_link
 
 
 ## 📋 Overview
