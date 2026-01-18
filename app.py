@@ -1,5 +1,5 @@
 import streamlit as st
-import google.generativeai as genai
+from google import genai  # Use the new SDK
 from tavily import TavilyClient
 import PyPDF2
 import json
@@ -16,11 +16,12 @@ def init_clients():
     tavily_key = os.getenv("TAVILY_API_KEY") or st.secrets.get("TAVILY_API_KEY", "")
 
     if not gemini_key or not tavily_key:
-        st.error("⚠️ API keys not found.")
+        st.error("⚠️ API keys not found. Please set GOOGLE_API_KEY and TAVILY_API_KEY.")
         st.stop()
 
-    genai.configure(api_key=gemini_key)
-    return genai, TavilyClient(api_key=tavily_key)
+    # New SDK Client initialization
+    client = genai.Client(api_key=gemini_key)
+    return client, TavilyClient(api_key=tavily_key)
 
 genai_client, tavily_client = init_clients()
 
@@ -32,38 +33,38 @@ def extract_text_from_pdf(pdf_file):
 def clean_json_response(text):
     text = text.strip()
     if text.startswith("```"):
+        # Handles ```json ... ``` blocks
         text = text.split("```")[1]
-    if text.lower().startswith("json"):
-        text = text[4:].strip()
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
     return text
 
 # ---------------- CLAIM EXTRACTION ----------------
 def extract_claims(text):
+    # Using Gemini 1.5 Flash for high-speed, free-tier extraction
+    model_id = "gemini-1.5-flash" 
+    
     prompt = f"""
-Extract ALL verifiable factual claims from this document.
-
-Return ONLY a JSON array:
-[
-  {{
-    "claim": "exact claim text",
-    "category": "financial/statistic/date/technical/economic",
-    "search_query": "optimized search query"
-  }}
-]
-
-Document:
-{text[:10000]}
-"""
+    Extract ALL verifiable factual claims from this document.
+    Return ONLY a JSON array:
+    [
+      {{
+        "claim": "exact claim text",
+        "category": "financial/statistic/date/technical/economic",
+        "search_query": "optimized search query"
+      }}
+    ]
+    Document: {text[:10000]}
+    """
 
     try:
-        model = genai_client.GenerativeModel("gemini-pro")
-        response = model.generate_content(prompt)
-
+        response = genai_client.models.generate_content(
+            model=model_id,
+            contents=prompt
+        )
         result = clean_json_response(response.text)
         parsed = json.loads(result)
-
         return parsed if isinstance(parsed, list) else []
-
     except Exception as e:
         st.error(f"Claim extraction failed: {e}")
         return []
@@ -79,35 +80,26 @@ def verify_claim(claim_obj):
         )
 
         prompt = f"""
-Fact-check the following claim using the web data.
+        Fact-check the following claim using the web data.
+        CLAIM: "{claim_obj['claim']}"
+        WEB DATA: {json.dumps(search_results)[:6000]}
+        Return ONLY JSON:
+        {{
+          "status": "VERIFIED/INACCURATE/FALSE",
+          "correct_info": "correct information",
+          "sources": ["url1", "url2"],
+          "explanation": "brief explanation"
+        }}
+        """
 
-CLAIM: "{claim_obj['claim']}"
-
-WEB DATA:
-{json.dumps(search_results)[:6000]}
-
-Return JSON:
-{{
-  "status": "VERIFIED/INACCURATE/FALSE",
-  "correct_info": "correct information",
-  "sources": ["url1", "url2"],
-  "explanation": "brief explanation"
-}}
-"""
-
-        model = genai_client.GenerativeModel("gemini-pro")
-        response = model.generate_content(prompt)
-
+        response = genai_client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=prompt
+        )
         result = clean_json_response(response.text)
         return json.loads(result)
-
     except Exception as e:
-        return {
-            "status": "ERROR",
-            "correct_info": "N/A",
-            "sources": [],
-            "explanation": str(e)
-        }
+        return {"status": "ERROR", "explanation": str(e)}
 
 # ---------------- UI ----------------
 st.title("🔍 Fact-Checking Web App")
