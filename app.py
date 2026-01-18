@@ -15,12 +15,10 @@ def init_clients():
     tavily_key = os.getenv("TAVILY_API_KEY") or st.secrets.get("TAVILY_API_KEY", "")
     
     if not gemini_key or not tavily_key:
-        st.error("⚠️ API keys not found. Configure in Streamlit secrets.")
+        st.error("⚠️ API keys not found.")
         st.stop()
     
-    # Initialize Google GenAI client (new SDK)
     client = genai.Client(api_key=gemini_key)
-    
     return client, TavilyClient(api_key=tavily_key)
 
 gemini_client, tavily_client = init_clients()
@@ -33,55 +31,44 @@ def extract_text_from_pdf(pdf_file):
     return text
 
 def clean_json_response(text):
-    """Clean markdown and extract JSON from response"""
     text = text.strip()
-    
-    # Remove markdown code blocks
     if text.startswith("```"):
         start = text.find("```") + 3
         end = text.rfind("```")
         if end > start:
             text = text[start:end].strip()
-    
-    # Remove 'json' prefix
     if text.startswith("json"):
         text = text[4:].strip()
-    
     return text
 
 def extract_claims(text):
-    prompt = f"""You are a fact-checking assistant. Extract ALL specific, verifiable factual claims from this document.
+    prompt = f"""Extract ALL verifiable factual claims from this document.
 
-Focus on claims that can be verified with web search:
-- Specific numbers: prices, percentages, statistics
+Focus on:
+- Numbers: prices, percentages, statistics
 - Dates and timeframes
-- Financial data: stock prices, GDP, revenue, market caps
-- Technical specifications and product details
-- Company announcements and activities
+- Financial data: stock prices, GDP, revenue
+- Technical specs
+- Company announcements
 - Economic indicators
 
-For EACH claim you find, create a JSON object with:
-- "claim": the exact text of the claim from the document
-- "category": one of [financial, statistic, date, technical, economic, announcement]
-- "search_query": an optimized Google search query to verify this claim
-
-Return your response as a valid JSON array. Example:
+Return JSON array:
 [
   {{
-    "claim": "Bitcoin is trading at $42,500 in January 2026",
-    "category": "financial",
-    "search_query": "Bitcoin price January 2026"
+    "claim": "exact claim text",
+    "category": "financial/statistic/date/technical/economic",
+    "search_query": "optimized search query"
   }}
 ]
 
-Document text:
+Document:
 {text[:10000]}
 
-Return ONLY the JSON array, no explanations, no markdown."""
+Return ONLY JSON array, no markdown."""
 
     try:
         response = gemini_client.models.generate_content(
-            model='gemini-2.0-flash-exp',
+            model='gemini-1.5-flash',  # ✅ Stable model with good free tier
             contents=prompt,
             config=types.GenerateContentConfig(
                 temperature=0.1,
@@ -90,13 +77,11 @@ Return ONLY the JSON array, no explanations, no markdown."""
         )
         
         if not response or not response.text:
-            st.error("Empty response from Gemini")
             return []
         
         result = clean_json_response(response.text)
         parsed = json.loads(result)
         
-        # Handle different response formats
         if isinstance(parsed, dict):
             if 'claims' in parsed:
                 return parsed['claims']
@@ -104,23 +89,14 @@ Return ONLY the JSON array, no explanations, no markdown."""
                 if isinstance(value, list):
                     return value
         
-        if isinstance(parsed, list):
-            return parsed
-            
-        return []
+        return parsed if isinstance(parsed, list) else []
         
-    except json.JSONDecodeError as e:
-        st.error(f"JSON parsing error: {str(e)}")
-        if response and response.text:
-            st.code(response.text[:500])
-        return []
     except Exception as e:
-        st.error(f"Error extracting claims: {str(e)}")
+        st.error(f"Error: {str(e)}")
         return []
 
 def verify_claim(claim_obj):
     try:
-        # Search the web
         search_results = tavily_client.search(
             query=claim_obj["search_query"],
             max_results=5,
@@ -128,42 +104,36 @@ def verify_claim(claim_obj):
             include_answer=True
         )
         
-        # Prepare search context
         search_context = ""
         for idx, result in enumerate(search_results.get('results', [])[:3]):
-            search_context += f"\n--- Source {idx+1} ---\n"
-            search_context += f"Title: {result.get('title', 'N/A')}\n"
+            search_context += f"\nSource {idx+1}: {result.get('title', 'N/A')}\n"
             search_context += f"URL: {result.get('url', 'N/A')}\n"
             search_context += f"Content: {result.get('content', 'N/A')[:400]}\n"
         
-        analysis_prompt = f"""You are a professional fact-checker. Verify if this claim is accurate based on current January 2026 web data.
+        analysis_prompt = f"""Fact-check this claim against January 2026 web data.
 
-CLAIM TO VERIFY:
-"{claim_obj['claim']}"
+CLAIM: "{claim_obj['claim']}"
 
-CURRENT WEB SEARCH RESULTS (January 2026):
+WEB RESULTS:
 {search_context}
 
-SEARCH ENGINE SUMMARY:
-{search_results.get('answer', 'No summary available')}
+SUMMARY: {search_results.get('answer', 'N/A')}
 
-Return a JSON object with:
+Return JSON:
 {{
-  "status": "VERIFIED" or "INACCURATE" or "FALSE",
-  "correct_info": "What is the actual current information",
+  "status": "VERIFIED/INACCURATE/FALSE",
+  "correct_info": "actual current information",
   "sources": ["url1", "url2"],
-  "explanation": "Brief explanation why"
+  "explanation": "brief reasoning"
 }}
 
-Status definitions:
-- VERIFIED: Claim matches current January 2026 data
-- INACCURATE: Wrong numbers, outdated data, or factual errors
-- FALSE: No evidence or contradicts current data
-
-Return ONLY the JSON object."""
+Definitions:
+- VERIFIED: Matches current data
+- INACCURATE: Wrong/outdated numbers
+- FALSE: No evidence or contradicts data"""
 
         response = gemini_client.models.generate_content(
-            model='gemini-2.0-flash-exp',
+            model='gemini-1.5-flash',  # ✅ Stable model
             contents=analysis_prompt,
             config=types.GenerateContentConfig(
                 temperature=0.1,
@@ -172,12 +142,11 @@ Return ONLY the JSON object."""
         )
         
         if not response or not response.text:
-            raise Exception("Empty response from Gemini")
+            raise Exception("Empty response")
         
         result = clean_json_response(response.text)
         verified_result = json.loads(result)
         
-        # Ensure sources is a list
         if 'sources' not in verified_result:
             verified_result['sources'] = []
         elif isinstance(verified_result['sources'], str):
@@ -195,28 +164,27 @@ Return ONLY the JSON object."""
 
 # UI
 st.title("🔍 Fact-Checking Web App")
-st.markdown("**Upload a PDF document to automatically verify factual claims against live web data.**")
+st.markdown("**Upload PDF to verify claims against live web data.**")
 
 with st.sidebar:
     st.header("ℹ️ How It Works")
     st.markdown("""
-    1. **Upload** PDF document
-    2. **Extract** claims using AI
-    3. **Verify** against live web
-    4. **Review** results with sources
+    1. Upload PDF
+    2. Extract claims (AI)
+    3. Verify with web search
+    4. Review results
     """)
-    
     st.divider()
     st.markdown("### 🔑 Powered By")
-    st.markdown("- Google Gemini 2.0 Flash")
+    st.markdown("- Google Gemini 1.5 Flash")
     st.markdown("- Tavily Search API")
     st.divider()
     st.caption(f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
-uploaded_file = st.file_uploader("📄 Upload PDF Document", type=['pdf'])
+uploaded_file = st.file_uploader("📄 Upload PDF", type=['pdf'])
 
 if uploaded_file:
-    st.success(f"✅ File uploaded: {uploaded_file.name}")
+    st.success(f"✅ Uploaded: {uploaded_file.name}")
     
     if st.button("🚀 Start Fact-Checking", type="primary", use_container_width=True):
         with st.spinner("📖 Reading PDF..."):
@@ -228,19 +196,14 @@ if uploaded_file:
             
             if not claims:
                 st.error("❌ No claims extracted.")
-                st.info("💡 Make sure your PDF contains specific factual claims.")
                 st.stop()
             
-            st.success(f"✅ Found {len(claims)} claims to verify")
+            st.success(f"✅ Found {len(claims)} claims")
         
         st.subheader("🔎 Verification Results")
         
-        verified_count = 0
-        inaccurate_count = 0
-        false_count = 0
-        error_count = 0
-        
-        progress_bar = st.progress(0)
+        verified = inaccurate = false = errors = 0
+        progress = st.progress(0)
         
         for idx, claim in enumerate(claims):
             with st.spinner(f"Verifying {idx+1}/{len(claims)}..."):
@@ -248,73 +211,71 @@ if uploaded_file:
                 
                 status = result.get("status", "ERROR").upper()
                 if status == "VERIFIED":
-                    verified_count += 1
+                    verified += 1
                     icon, color = "✅", "green"
                 elif status == "INACCURATE":
-                    inaccurate_count += 1
+                    inaccurate += 1
                     icon, color = "⚠️", "orange"
                 elif status == "ERROR":
-                    error_count += 1
+                    errors += 1
                     icon, color = "🔧", "gray"
                 else:
-                    false_count += 1
+                    false += 1
                     icon, color = "❌", "red"
                 
-                claim_preview = claim.get('claim', 'Unknown')[:100]
-                with st.expander(f"{icon} **{claim_preview}...**", expanded=(status != "VERIFIED")):
+                with st.expander(f"{icon} {claim.get('claim', '')[:100]}...", expanded=(status != "VERIFIED")):
                     st.markdown(f"**Status:** :{color}[{status}]")
                     st.markdown(f"**Category:** {claim.get('category', 'N/A')}")
                     st.markdown(f"**Correct Info:** {result.get('correct_info', 'N/A')}")
                     st.markdown(f"**Explanation:** {result.get('explanation', 'N/A')}")
                     
-                    sources = result.get('sources', [])
-                    if sources and isinstance(sources, list):
+                    if result.get('sources'):
                         st.markdown("**Sources:**")
-                        for source in sources[:3]:
-                            if source:
-                                st.markdown(f"- {source}")
+                        for src in result['sources'][:3]:
+                            if src:
+                                st.markdown(f"- {src}")
                 
-                progress_bar.progress((idx + 1) / len(claims))
+                progress.progress((idx + 1) / len(claims))
         
         st.divider()
         st.subheader("📊 Summary")
         
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("✅ Verified", verified_count)
-        col2.metric("⚠️ Inaccurate", inaccurate_count)
-        col3.metric("❌ False", false_count)
-        col4.metric("🔧 Errors", error_count)
+        col1.metric("✅ Verified", verified)
+        col2.metric("⚠️ Inaccurate", inaccurate)
+        col3.metric("❌ False", false)
+        col4.metric("🔧 Errors", errors)
         
-        total = len(claims) - error_count
+        total = len(claims) - errors
         if total > 0:
-            accuracy = (verified_count / total * 100)
+            accuracy = (verified / total * 100)
             
             if accuracy < 50:
-                st.error(f"⚠️ Only {accuracy:.1f}% verified. Document has significant inaccuracies.")
+                st.error(f"⚠️ Only {accuracy:.1f}% verified. Significant inaccuracies.")
             elif accuracy < 80:
-                st.warning(f"⚠️ {accuracy:.1f}% verified. Some claims need correction.")
+                st.warning(f"⚠️ {accuracy:.1f}% verified. Some corrections needed.")
             else:
-                st.success(f"✅ {accuracy:.1f}% verified. Document is mostly accurate.")
+                st.success(f"✅ {accuracy:.1f}% verified. Mostly accurate.")
         
-        results_json = json.dumps({
+        results = json.dumps({
             "document": uploaded_file.name,
             "timestamp": datetime.now().isoformat(),
             "summary": {
-                "total_claims": len(claims),
-                "verified": verified_count,
-                "inaccurate": inaccurate_count,
-                "false": false_count,
-                "errors": error_count,
-                "accuracy_percentage": round(accuracy, 2) if total > 0 else 0
+                "total": len(claims),
+                "verified": verified,
+                "inaccurate": inaccurate,
+                "false": false,
+                "errors": errors,
+                "accuracy": round(accuracy, 2) if total > 0 else 0
             }
         }, indent=2)
         
         st.download_button(
-            "📥 Download Report (JSON)",
-            results_json,
+            "📥 Download Report",
+            results,
             file_name=f"fact_check_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
             mime="application/json"
         )
 
 else:
-    st.info("👆 Upload a PDF document to begin fact-checking")
+    st.info("👆 Upload a PDF to begin")
