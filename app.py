@@ -68,7 +68,7 @@ Return ONLY JSON array, no markdown."""
 
     try:
         response = gemini_client.models.generate_content(
-            model='gemini-1.5-flash',  # ✅ Stable model with good free tier
+            model='gemini-1.5-flash-latest',  # ✅ Correct format
             contents=prompt,
             config=types.GenerateContentConfig(
                 temperature=0.1,
@@ -133,7 +133,7 @@ Definitions:
 - FALSE: No evidence or contradicts data"""
 
         response = gemini_client.models.generate_content(
-            model='gemini-1.5-flash',  # ✅ Stable model
+            model='gemini-1.5-flash-latest',  # ✅ Correct format
             contents=analysis_prompt,
             config=types.GenerateContentConfig(
                 temperature=0.1,
