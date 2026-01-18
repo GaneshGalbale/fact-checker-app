@@ -56,7 +56,7 @@ Document:
 """
 
     try:
-        model = genai_client.GenerativeModel("gemini-1.5-flash")
+        model = genai_client.GenerativeModel("gemini-pro")
         response = model.generate_content(prompt)
 
         result = clean_json_response(response.text)
@@ -95,7 +95,7 @@ Return JSON:
 }}
 """
 
-        model = genai_client.GenerativeModel("gemini-1.5-flash")
+        model = genai_client.GenerativeModel("gemini-pro")
         response = model.generate_content(prompt)
 
         result = clean_json_response(response.text)
