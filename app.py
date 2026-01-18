@@ -1,5 +1,5 @@
 import streamlit as st
-from google import genai  # Use the new SDK
+from google import genai
 from tavily import TavilyClient
 import PyPDF2
 import json
@@ -8,6 +8,8 @@ from datetime import datetime
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="Fact Checker", page_icon="🔍", layout="wide")
+
+MODEL_NAME = "models/gemini-2.5-flash"
 
 # ---------------- INIT CLIENTS ----------------
 @st.cache_resource
@@ -19,7 +21,6 @@ def init_clients():
         st.error("⚠️ API keys not found. Please set GOOGLE_API_KEY and TAVILY_API_KEY.")
         st.stop()
 
-    # New SDK Client initialization
     client = genai.Client(api_key=gemini_key)
     return client, TavilyClient(api_key=tavily_key)
 
@@ -33,7 +34,6 @@ def extract_text_from_pdf(pdf_file):
 def clean_json_response(text):
     text = text.strip()
     if text.startswith("```"):
-        # Handles ```json ... ``` blocks
         text = text.split("```")[1]
         if text.lower().startswith("json"):
             text = text[4:].strip()
@@ -41,25 +41,25 @@ def clean_json_response(text):
 
 # ---------------- CLAIM EXTRACTION ----------------
 def extract_claims(text):
-    # Using Gemini 1.5 Flash for high-speed, free-tier extraction
-    model_id = "gemini-1.5-flash" 
-    
     prompt = f"""
-    Extract ALL verifiable factual claims from this document.
-    Return ONLY a JSON array:
-    [
-      {{
-        "claim": "exact claim text",
-        "category": "financial/statistic/date/technical/economic",
-        "search_query": "optimized search query"
-      }}
-    ]
-    Document: {text[:10000]}
-    """
+Extract ALL verifiable factual claims from this document.
+
+Return ONLY a JSON array:
+[
+  {{
+    "claim": "exact claim text",
+    "category": "financial/statistic/date/technical/economic",
+    "search_query": "optimized search query"
+  }}
+]
+
+Document:
+{text[:10000]}
+"""
 
     try:
         response = genai_client.models.generate_content(
-            model=model_id,
+            model=MODEL_NAME,
             contents=prompt
         )
         result = clean_json_response(response.text)
@@ -80,20 +80,24 @@ def verify_claim(claim_obj):
         )
 
         prompt = f"""
-        Fact-check the following claim using the web data.
-        CLAIM: "{claim_obj['claim']}"
-        WEB DATA: {json.dumps(search_results)[:6000]}
-        Return ONLY JSON:
-        {{
-          "status": "VERIFIED/INACCURATE/FALSE",
-          "correct_info": "correct information",
-          "sources": ["url1", "url2"],
-          "explanation": "brief explanation"
-        }}
-        """
+Fact-check the following claim using the web data.
+
+CLAIM: "{claim_obj['claim']}"
+
+WEB DATA:
+{json.dumps(search_results)[:6000]}
+
+Return ONLY JSON:
+{{
+  "status": "VERIFIED/INACCURATE/FALSE",
+  "correct_info": "correct information",
+  "sources": ["url1", "url2"],
+  "explanation": "brief explanation"
+}}
+"""
 
         response = genai_client.models.generate_content(
-            model="gemini-1.5-flash",
+            model=MODEL_NAME,
             contents=prompt
         )
         result = clean_json_response(response.text)
